@@ -1,5 +1,4 @@
 # proxy cadvisor traffic hack
-# connect on host ip, port 9244
 cadvisor:
   image: rancher/haproxy-cadvisor:v0.0.1
   labels:

@@ -2,3 +2,10 @@
   name: cAdvisor Proxy
   version: v0.0.1
   minimum_rancher_version: v1.1.0-dev4
+cadvisor:
+  health_check:
+    port: 9244
+    interval: 5000
+    response_timeout: 3000
+    unhealthy_threshold: 3
+    healthy_threshold: 2
