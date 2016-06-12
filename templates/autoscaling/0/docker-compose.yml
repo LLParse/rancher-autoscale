@@ -1,0 +1,10 @@
+autoscale:
+  image: rancher/autoscale:v0.0.1
+  command: |
+    service ${SERVICE}
+      --cpu ${CPU_THRESHOLD_PCT}
+      --mem ${MEM_THRESHOLD_PCT}
+      --period ${THRESHOLD_PERIOD}
+      --warmup ${CONTAINER_WARMUP}
+  labels:
+    io.rancher.container.start_once: 'true'

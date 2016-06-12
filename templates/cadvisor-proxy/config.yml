@@ -1,0 +1,5 @@
+name: cAdvisor Proxy
+description: |
+  Proxy cAdvisor traffic
+version: v0.0.1
+category: Features

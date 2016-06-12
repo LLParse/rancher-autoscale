@@ -1,0 +1,38 @@
+.catalog:
+  name: Autoscaling
+  version: v0.0.1
+  minimum_rancher_version: v1.1.0-dev4
+  questions:
+  - variable: SERVICE
+    description: Choose the service to autoscale
+    label: Scaled Service
+    required: true
+    type: service
+  - variable: CPU_THRESHOLD_PCT
+    description: Launch a new container when average CPU utilization meets or exceeds (>=) a certain percentage
+    label: CPU Threshold (%)
+    required: true
+    type: int
+    min: 0
+    max: 100
+    default: 80
+  - variable: MEM_THRESHOLD_PCT
+    description: Launch a new container when average Memory utilization meets or exceeds (>=) a certain percentage
+    label: RAM Threshold (%)
+    required: true
+    type: int
+    min: 0
+    max: 100
+    default: 90
+  - variable: THRESHOLD_PERIOD
+    description: Minimum period of time that a resource utilization threshold must continuously be met before scaling occurs
+    label: Period (time)
+    required: true
+    type: string
+    default: 1m0s
+  - variable: CONTAINER_WARMUP
+    description: The period of time that new containers are given to warm up before scaling resumes
+    label: Container Warmup (time)
+    required: true
+    type: string
+    default: 1m0s
