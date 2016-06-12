@@ -179,6 +179,28 @@ func (m *Client) GetServiceContainers(serviceName string, stackName string) ([]C
 	return serviceContainers, nil
 }
 
+func (m *Client) GetContainerHosts(containers []Container) ([]Host, error) {
+  hostUuids := make(map[string]bool)
+  for _, container := range containers {
+    hostUuids[container.HostUUID] = true
+  }
+
+  hosts, err := m.GetHosts()
+  if err != nil {
+    return nil, err
+  }
+
+  filtered := []Host{}
+  for _, host := range hosts {
+    if hostUuids[host.UUID] {
+      filtered = append(filtered, host)
+    }
+  }
+
+  return filtered, nil
+}
+
+
 func (m *Client) GetHosts() ([]Host, error) {
 	resp, err := m.SendRequest("/hosts")
 	var hosts []Host
