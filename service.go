@@ -11,8 +11,6 @@ import (
   "encoding/json"
   "golang.org/x/net/websocket"
   "github.com/urfave/cli"
-  "github.com/google/cadvisor/client"
-  "github.com/google/cadvisor/info/v1"
   "github.com/rancher/go-rancher-metadata/metadata"
   rclient "github.com/rancher/go-rancher/client"
 )
@@ -71,8 +69,6 @@ type AutoscaleClient struct {
   Stack       string
   Service     string
   MClient     *metadata.Client
-  RContainers []metadata.Container
-  CContainers []v1.ContainerInfo
 }
 
 func NewAutoscaleClient(c *cli.Context, stackservice string) *AutoscaleClient {
@@ -127,47 +123,51 @@ func NewAutoscaleClient(c *cli.Context, stackservice string) *AutoscaleClient {
     log.Fatalln(err)
   }
 
+  if t, ok := kv["type"].(string); ok && t == "error" {
+    log.Fatalln("Error:", kv["message"].(string))
+  }
+
+  metric := make(chan []byte)
+  fmt.Println("kv:")
+  for k, v := range kv {
+    fmt.Printf("%s: %s\n", k, v)
+  }
   wsendpoint := kv["url"].(string) + "?token=" + kv["token"].(string)
-  ws, err := websocket.Dial(wsendpoint, "", statsUrl)
-  if err != nil {
-    log.Fatalln(err)
-  }
-  defer ws.Close()
 
-  var msg = make([]byte, 65536)
-  var n int
-  if n, err = ws.Read(msg); err != nil {
-      log.Fatal(err)
-  }
-  fmt.Printf("Received: %s.\n", msg[:n])
+  go ReadMetrics(wsendpoint, statsUrl, metric)
 
+  for {
+    select {
+    case m := <-metric:
+      fmt.Println(string(m))
+    }
+  }
 
   os.Exit(0)
-
-
-
-  // get hosts
-  var rcontainers []metadata.Container
-  hosts, err := mclient.GetContainerHosts(rcontainers)
-  if err != nil {
-    log.Fatalln(err)
-  }
-  fmt.Println("Rancher Hosts:", hosts)
-
-
-  // get 'cadvisor' containers
-  ccontainers, err := GetCadvisorContainers(rcontainers, hosts)
-  if err != nil {
-    log.Fatalln(err)
-  }
-  fmt.Println("cAdvisor Containers:", ccontainers)
 
   return &AutoscaleClient{
     Stack: stackName,
     Service: serviceName,
     MClient: mclient,
-    RContainers: rcontainers,
-    CContainers: ccontainers,
+  }
+}
+
+func ReadMetrics(url string, origin string, metric chan<- []byte) error {
+  ws, err := websocket.Dial(url, "", origin)
+  if err != nil {
+    return err
+  }
+  defer ws.Close()
+
+  var msg = make([]byte, 65536)
+  var n int
+  for {
+    for {
+      if n, err = ws.Read(msg); err != nil {
+          return err
+      }
+      metric <- msg[:n]
+    }
   }
 }
 
@@ -185,30 +185,4 @@ func ScaleService(c *cli.Context) error {
 
   client := NewAutoscaleClient(c, stackservice)
   return client.Monitor()
-}
-
-func GetCadvisorContainers(rancherContainers []metadata.Container, hosts []metadata.Host) (cinfo []v1.ContainerInfo, err error) {
-  for _, host := range hosts {
-    address := "http://" + host.AgentIP + ":9244/"
-    cli, err := client.NewClient(address)
-    if err != nil {
-      return nil, err
-    }
-
-    containers, err := cli.AllDockerContainers(&v1.ContainerInfoRequest{ NumStats: -1 })
-    if err != nil {
-      return nil, err
-    }
-
-    for _, container := range containers {
-      for _, rancherContainer := range rancherContainers {
-        if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
-          cinfo = append(cinfo, container)
-          break
-        }
-      }
-    }
-  }
-
-  return 
 }
