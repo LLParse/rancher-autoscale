@@ -20,9 +20,10 @@ import (
 const (
   // Rancher metadata endpoint URL 
   metadataUrl = "http://rancher-metadata.rancher.internal/2015-12-19"
-  // frequency at which to poll cAdvisor for metrics
-  pollFrequency = 1 * time.Second
-  pollService = 15 * time.Second
+  // interval at which to poll cAdvisor for metrics
+  pollCadvisorInterval = 1 * time.Second
+  // interval at which to poll metadata for scale changes
+  pollMetadataInterval = 15 * time.Second
 )
 
 func ServiceCommand() cli.Command {
@@ -41,6 +42,10 @@ func ServiceCommand() cli.Command {
         Name:  "mem",
         Usage: "Memory Usage threshold in percent",
         Value: 80,
+      },
+      cli.BoolFlag{
+        Name:  "and",
+        Usage: "Both CPU and Memory thresholds must be met",
       },
       cli.DurationFlag{
         Name:  "period",
@@ -79,6 +84,7 @@ type AutoscaleClient struct {
   // configuration parameters
   CpuThreshold   float64
   MemThreshold   float64
+  And            bool
   Warmup         time.Duration
   Period         time.Duration
 
@@ -132,6 +138,7 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
     Service: service,
     CpuThreshold: c.Float64("cpu"),
     MemThreshold: c.Float64("mem"),
+    And: c.Bool("and"),
     Warmup: c.Duration("warmup"),
     Period: c.Duration("period"),
     mClient: mclient,
@@ -181,7 +188,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
           go PollContinuously(container.Id, host.AgentIP, metrics, done)
 
           // spread out the requests evenly
-          time.Sleep(time.Duration(int(pollFrequency) / c.Service.Scale))
+          time.Sleep(time.Duration(int(pollCadvisorInterval) / c.Service.Scale))
           break
         }
       }
@@ -195,7 +202,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
   c.CContainers = cinfo
 
   fmt.Printf("Monitoring service '%s' in stack '%s'\n", c.Service.Name, c.StackName)
-  go Process(metrics, done)
+  go c.ProcessMetrics(metrics, done)
 
   return c.PollService(done)
 }
@@ -203,7 +210,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
 // indefinitely poll for service scale changes
 func (c *AutoscaleClient) PollService(done chan<- bool) error {
   for {
-    time.Sleep(pollService)
+    time.Sleep(pollMetadataInterval)
 
     service, err := c.mClient.GetServiceByName(c.StackName, c.Service.Name)
     if err != nil {
@@ -231,18 +238,53 @@ func (c *AutoscaleClient) PollService(done chan<- bool) error {
 }
 
 // process incoming metrics
-func Process(metrics <-chan v1.ContainerInfo, done chan bool) {
-  total := 0
+func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done chan bool) {
+  // container ID
+  infoMap := make(map[string]*v1.ContainerInfo)
+  totalCount := 0
   for {
     select {
     case metric := <-metrics:
-      if total += 1; total % 100 == 0 {
-        fmt.Printf("Collected %d container metrics\n", total)
-        fmt.Println(metric)
+      if _, exists := infoMap[metric.Id]; !exists {
+        infoMap[metric.Id] = &metric
+      } else {
+        // let's assume we never see a duplicate
+
+        // append new metrics
+        infoMap[metric.Id].Stats = append(infoMap[metric.Id].Stats, metric.Stats...)
+
+        // purge metrics outside the period
+        windowStart := time.Now().Add(-1 * c.Period)
+
+        // create a copy of the stats, this may be expensive
+        tmpStats := infoMap[metric.Id].Stats
+
+        for _, stat := range tmpStats {
+          // we assume that stats are ordered by time
+          if !stat.Timestamp.Before(windowStart) {
+            break
+          }
+          // sanity check
+          if !stat.Eq(infoMap[metric.Id].Stats[0]) {
+            log.Fatalln("Error in sliding window impl")
+          }
+          // delete the oldest metric preserving order
+          fmt.Printf("  Deleting %v from %s\n", infoMap[metric.Id].Stats[0].Timestamp, infoMap[metric.Id].Id)
+          infoMap[metric.Id].Stats = append(infoMap[metric.Id].Stats[:0], infoMap[metric.Id].Stats[1:]...)
+        }
+      }
+      if totalCount += 1; totalCount % (10 * c.Service.Scale) == 0 {
+        fmt.Printf("Collected %d containerInfos\n", totalCount)
+        for _, info := range infoMap {
+          fmt.Printf("Container %s has %d datapoints\n", info.Id, len(info.Stats))
+          /*for _, stat := range info.Stats {
+            fmt.Printf("  %v\n", stat)
+          }*/
+        }
       }
     case <-done:
       done<-true
-      fmt.Printf("Draining metrics")
+      /*fmt.Printf("Draining metrics")
       ticks := 0
       for _ = range time.Tick(100 * time.Millisecond) {
         for {
@@ -256,7 +298,7 @@ func Process(metrics <-chan v1.ContainerInfo, done chan bool) {
         if ticks += 1; ticks == 10 {
           break
         }
-      }
+      }*/
       fmt.Printf("Stopped processing all metrics")
       return
     }
@@ -280,7 +322,7 @@ func PollContinuously(containerId string, hostIp string, metrics chan<- v1.Conta
       return
     default:
     }
-    time.Sleep(pollFrequency)
+    time.Sleep(pollCadvisorInterval)
 
     newStart := time.Now()
     info, err := cli.DockerContainer(containerId, &v1.ContainerInfoRequest{
