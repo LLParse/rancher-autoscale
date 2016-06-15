@@ -7,6 +7,5 @@ autoscale:
       --period ${THRESHOLD_PERIOD}
       --warmup ${CONTAINER_WARMUP}
   labels:
-    io.rancher.container.start_once: 'true'
     io.rancher.container.create_agent: 'true'
     io.rancher.container.agent.role: environment

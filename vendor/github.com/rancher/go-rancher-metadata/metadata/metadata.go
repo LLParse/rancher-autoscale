@@ -96,6 +96,20 @@ func (m *Client) GetSelfServiceByName(name string) (Service, error) {
 	return service, nil
 }
 
+func (m *Client) GetServiceByName(stackName string, serviceName string) (Service, error) {
+	resp, err := m.SendRequest(fmt.Sprintf("/stacks/%s/services/%s", stackName, serviceName))
+	var service Service
+	if err != nil {
+		return service, err
+	}
+
+	if err = json.Unmarshal(resp, &service); err != nil {
+		return service, err
+	}
+
+	return service, nil
+}
+
 func (m *Client) GetSelfService() (Service, error) {
 	resp, err := m.SendRequest("/self/service")
 	var service Service

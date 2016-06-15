@@ -11,4 +11,4 @@ docker rm -f $id
 docker build -t rancher/autoscale:v$version .
 docker tag rancher/autoscale:v$version rancher/autoscale
 docker push rancher/autoscale
-gsync rancher/autoscale:v$version james2 5
+gsync rancher/autoscale:v$version james 5
