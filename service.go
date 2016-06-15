@@ -236,14 +236,14 @@ func Process(metrics <-chan v1.ContainerInfo, done chan bool) {
   for {
     select {
     case metric := <-metrics:
-      if total += 1; total % 10 == 0 {
+      if total += 1; total % 100 == 0 {
         fmt.Printf("Collected %d container metrics\n", total)
         fmt.Println(metric)
       }
     case <-done:
       done<-true
-      log.Printf("Draining metrics")
-      /*ticks := 0
+      fmt.Printf("Draining metrics")
+      ticks := 0
       for _ = range time.Tick(100 * time.Millisecond) {
         for {
           select {
@@ -256,8 +256,8 @@ func Process(metrics <-chan v1.ContainerInfo, done chan bool) {
         if ticks += 1; ticks == 10 {
           break
         }
-      }*/
-      log.Printf("Stopped processing all metrics")
+      }
+      fmt.Printf("Stopped processing all metrics")
       return
     }
   }
@@ -276,8 +276,9 @@ func PollContinuously(containerId string, hostIp string, metrics chan<- v1.Conta
     select {
     case <-done:
       done<-true
-      log.Printf("Stopped collecting metrics for container %s", containerId)
+      fmt.Printf("Stopped collecting metrics for container %s", containerId)
       return
+    default:
     }
     time.Sleep(pollFrequency)
 

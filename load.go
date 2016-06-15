@@ -44,7 +44,7 @@ func LoadCommand() cli.Command {
           },
           cli.IntFlag{
             Name:  "routines, r",
-            Usage: "Spawn `N` goroutines, should be divisible by # host cpu threads, `N` %% 0 == 0",
+            Usage: "Spawn `N` goroutines, should be divisible by # cpu threads",
             Value: runtime.NumCPU(),
           },
         },
