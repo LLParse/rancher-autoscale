@@ -8,22 +8,39 @@
     label: Scaled Service
     required: true
     type: service
-  - variable: CPU_THRESHOLD_PCT
-    description: Launch a new container when average CPU utilization meets or exceeds (>=) a certain percentage
-    label: CPU Threshold (%)
+  - variable: MIN_CPU_THRESHOLD_PCT
+    description: Stop a container when average CPU utilization drops below (<) a certain percentage
+    label: Min CPU Threshold (%)
     required: true
     type: int
     min: 0
     max: 100
-    default: 80
-  - variable: MEM_THRESHOLD_PCT
-    description: Launch a new container when average Memory utilization meets or exceeds (>=) a certain percentage
-    label: RAM Threshold (%)
+    default: 0
+  - variable: MAX_CPU_THRESHOLD_PCT
+    description: Launch a container when average CPU utilization meets or exceeds (>=) a certain percentage
+    label: Max CPU Threshold (%)
     required: true
     type: int
     min: 0
     max: 100
+    default: 100
+  - variable: MIN_MEM_THRESHOLD_MIB
+    description: Stop a container when average Memory utilization drops below (<) a certain size
+    label: Min Memory Threshold (MiB)
+    required: true
+    type: int
     default: 90
+  - variable: MAX_MEM_THRESHOLD_MIB
+    description: Launch a container when average Memory utilization meets or exceeds (>=) a certain size
+    label: Max Memory Threshold (MiB)
+    required: true
+    type: int
+    default: 90
+  - variable: BOTH_THRESHOLDS
+    description: Both CPU/Memory thresholds must be met
+    label: Meet Both Thresholds
+    type: boolean
+    default: false
   - variable: THRESHOLD_PERIOD
     description: Minimum period of time that a resource utilization threshold must continuously be met before scaling occurs
     label: Period (time)
@@ -31,8 +48,19 @@
     type: string
     default: 30s
   - variable: CONTAINER_WARMUP
-    description: The period of time that new containers are given to warm up before scaling resumes
+    description: The period of time to wait after scaling up
     label: Container Warmup (time)
     required: true
     type: string
     default: 15s
+  - variable: CONTAINER_COOLDOWN
+    description: The period of time to wait after scaling down
+    label: Container Cooldown (time)
+    required: true
+    type: string
+    default: 15s
+  - variable: VERBOSE
+    label: Verbose Logging
+    description: Enable verbose logging for debugging purposes
+    type: boolean
+    default: false

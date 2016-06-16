@@ -34,18 +34,28 @@ func ServiceCommand() cli.Command {
     Action: ScaleService,
     Flags: []cli.Flag{
       cli.Float64Flag{
-        Name:  "cpu",
-        Usage: "CPU Usage threshold in percent",
-        Value: 80,
+        Name:  "cpumin",
+        Usage: "Minimum CPU usage threshold in percent",
+        Value: 0,
       },
       cli.Float64Flag{
-        Name:  "mem",
+        Name:  "cpumax",
+        Usage: "Maximum CPU usage threshold in percent",
+        Value: 100,
+      },
+      cli.Float64Flag{
+        Name:  "memmin",
+        Usage: "Minimum Memory usage threshold in MiB",
+        Value: 0,
+      },
+      cli.Float64Flag{
+        Name:  "memmax",
         Usage: "Memory Usage threshold in percent",
-        Value: 80,
+        Value: 4096,
       },
       cli.BoolFlag{
         Name:  "and",
-        Usage: "Both CPU and Memory thresholds must be met",
+        Usage: "Both CPU and Memory minimum or maximum thresholds must be met",
       },
       cli.DurationFlag{
         Name:  "period",
@@ -56,6 +66,15 @@ func ServiceCommand() cli.Command {
         Name:  "warmup",
         Usage: "",
         Value: 60 * time.Second,
+      },
+      cli.DurationFlag{
+        Name:  "cooldown",
+        Usage: "",
+        Value: 60 * time.Second,
+      },
+      cli.BoolFlag{
+        Name:  "verbose, v",
+        Usage: "Enable verbose logging output",
       },
       cli.StringFlag{
         Name:  "url",
@@ -78,21 +97,27 @@ func ServiceCommand() cli.Command {
 
 type AutoscaleClient struct {
   // configuration argument
-  StackName      string
-  Service        metadata.Service
+  StackName       string
+  Service         metadata.Service
   
   // configuration parameters
-  CpuThreshold   float64
-  MemThreshold   float64
-  And            bool
-  Warmup         time.Duration
-  Period         time.Duration
+  MinCpuThreshold float64
+  MaxCpuThreshold float64
+  MinMemThreshold float64
+  MaxMemThreshold float64
+  And             bool
+  Warmup          time.Duration
+  Period          time.Duration
+  Verbose         bool
 
-  mClient        *metadata.Client
-  mContainers    []metadata.Container
-  mHosts         []metadata.Host
-  CContainers    []v1.ContainerInfo
-  ContainerHosts map[string]metadata.Host
+  mClient         *metadata.Client
+  mContainers     []metadata.Container
+  mHosts          []metadata.Host
+  CContainers     []v1.ContainerInfo
+  ContainerHosts  map[string]metadata.Host
+  cInfoMap        map[string]*v1.ContainerInfo
+  requestCount    int
+  deleteCount     int
 }
 
 func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
@@ -136,14 +161,18 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
   client := &AutoscaleClient{
     StackName: stackName,
     Service: service,
-    CpuThreshold: c.Float64("cpu"),
-    MemThreshold: c.Float64("mem"),
+    MinCpuThreshold: c.Float64("mincpu"),
+    MaxCpuThreshold: c.Float64("maxcpu"),
+    MinMemThreshold: c.Float64("minmem"),
+    MaxMemThreshold: c.Float64("maxmem"),
     And: c.Bool("and"),
     Warmup: c.Duration("warmup"),
     Period: c.Duration("period"),
+    Verbose: c.Bool("verbose"),
     mClient: mclient,
     mContainers: rcontainers,
     mHosts: rhosts,
+    cInfoMap: make(map[string]*v1.ContainerInfo),
   }
 
   // get cadvisor containers
@@ -185,7 +214,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
         if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
           cinfo = append(cinfo, container)
           c.ContainerHosts[container.Id] = host
-          go PollContinuously(container.Id, host.AgentIP, metrics, done)
+          go c.PollContinuously(container.Id, host.AgentIP, metrics, done)
 
           // spread out the requests evenly
           time.Sleep(time.Duration(int(pollCadvisorInterval) / c.Service.Scale))
@@ -239,37 +268,28 @@ func (c *AutoscaleClient) PollService(done chan<- bool) error {
 
 // process incoming metrics
 func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done chan bool) {
-  // container ID
-  cinfo := make(map[string]*v1.ContainerInfo)
-  totalCount := 0
-  deleteCount := 0
   fmt.Println("Started processing metrics")
   for {
     select {
     case metric := <-metrics:
-      if _, exists := cinfo[metric.Id]; !exists {
-        cinfo[metric.Id] = &metric
+      if _, exists := c.cInfoMap[metric.Id]; !exists {
+        c.cInfoMap[metric.Id] = &metric
       } else {
         // append new metrics
-        cinfo[metric.Id].Stats = append(cinfo[metric.Id].Stats, metric.Stats...)
+        c.cInfoMap[metric.Id].Stats = append(c.cInfoMap[metric.Id].Stats, metric.Stats...)
 
-        if len(cinfo[metric.Id].Stats) >= 2 {
+        if len(c.cInfoMap[metric.Id].Stats) >= 2 {
           // delete old metrics
-          deleteCount += c.DeleteOldMetrics(cinfo[metric.Id])
+          c.DeleteOldMetrics(c.cInfoMap[metric.Id])
 
           // analyze metrics
-          c.AnalyzeMetrics(cinfo[metric.Id])          
+          c.AnalyzeMetrics(c.cInfoMap[metric.Id])
+
         }
       }
-      if totalCount += 1; totalCount % (10 * c.Service.Scale) == 0 {
-        fmt.Printf("%d requests, %d deleted\n", totalCount, deleteCount)
-        for _, info := range cinfo {
-          fmt.Printf("  %s: %d metrics, %v window\n", info.Labels["io.rancher.container.name"], 
-            len(info.Stats), StatsWindow(info.Stats, 0, 100 * time.Millisecond))
-          /*for _, stat := range info.Stats {
-            fmt.Printf("  %v\n", stat)
-          }*/
-        }
+      // print statistics every 10 seconds
+      if c.requestCount % (10 * c.Service.Scale) == 0 {
+        c.PrintStatistics()
       }
     case <-done:
       done<-true
@@ -279,27 +299,50 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done c
   }
 }
 
+func (c *AutoscaleClient) PrintStatistics() {
+  fmt.Printf("%d requests, %d deleted\n", c.requestCount, c.deleteCount)
+  for _, info := range c.cInfoMap {
+    fmt.Printf("  %s: %d metrics, %v window\n", info.Labels["io.rancher.container.name"], 
+      len(info.Stats), StatsWindow(info.Stats, 0, 100 * time.Millisecond))
+    /*for _, stat := range info.Stats {
+      fmt.Printf("  %v\n", stat)
+    }*/
+  }  
+}
+
+// analyze metric window and trigger scale operations
 func (c *AutoscaleClient) AnalyzeMetrics(cinfo *v1.ContainerInfo) {
   stats := cinfo.Stats
   begin := stats[0]
   end := stats[len(stats)-1]
   duration := end.Timestamp.Sub(begin.Timestamp)
 
-  // compute cpu load
-  //averageCpuPercent := (end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / uint64(duration) * 100
+  // don't compute anything until we have enough metrics
+  if duration < c.Period {
+    return
+  }
 
-  fmt.Printf("%v %v\n", time.Duration(int(end.Cpu.Usage.Total - begin.Cpu.Usage.Total)) * time.Nanosecond, duration)
+  // compute average CPU over entire window
+  containerAverageCpu := float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / float64(duration) * 100
+
+  // compute
+
+  fmt.Printf("avg cpu: %v%%, start mem: %v, stop mem: %v\n", containerAverageCpu, begin.Memory.Usage, end.Memory.Usage)
+
+  // make decisions
+  if containerAverageCpu >= c.MaxCpuThreshold {
+    fmt.Println("*** Trigger scale up")
+  }
 }
 
 // delete metrics outside of the time window
-func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) (deleteCount int) {
+func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) {
   precision := 100 * time.Millisecond
-  for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; deleteCount += 1 {
+  for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; c.deleteCount += 1 {
     //if !cinfo.Stats[0].Timestamp.Before(windowStart) || window > 0 && window < c.Period {
     // fmt.Printf("  Deleting %v from %s\n", cinfo.Stats[0].Timestamp, cinfo.Labels["io.rancher.container.name"])
     cinfo.Stats = append(cinfo.Stats[:0], cinfo.Stats[1:]...)
   }
-  return
 }
 
 func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) time.Duration {
@@ -310,7 +353,7 @@ func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) ti
 }
 
 // poll cAdvisor continuously for container metrics
-func PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo, done chan bool) {
+func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo, done chan bool) {
   address := "http://" + hostIp + ":9244/"
   cli, err := client.NewClient(address)
   if err != nil {
@@ -338,6 +381,7 @@ func PollContinuously(containerId string, hostIp string, metrics chan<- v1.Conta
 
     start = newStart
     metrics <- info
+    c.requestCount += 1
   }
 }
 

@@ -43,10 +43,10 @@ autoscale:
   image: rancher/autoscale:v0.0.1
   command: |
     service etcd/etcd
-      --cpu 50
-      --mem 512
-      --period 15s
-      --warmup 5s
+      --cpu 25
+      --mem 128
+      --period 1m0s
+      --warmup 15s
   links:
   - etcd
   labels:
