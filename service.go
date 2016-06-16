@@ -253,8 +253,13 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done c
         // append new metrics
         cinfo[metric.Id].Stats = append(cinfo[metric.Id].Stats, metric.Stats...)
 
-        // delete old metrics
-        deleteCount += c.DeleteOldMetrics(cinfo[metric.Id])
+        if len(cinfo[metric.Id].Stats) >= 2 {
+          // delete old metrics
+          deleteCount += c.DeleteOldMetrics(cinfo[metric.Id])
+
+          // analyze metrics
+          c.AnalyzeMetrics(cinfo[metric.Id])          
+        }
       }
       if totalCount += 1; totalCount % (10 * c.Service.Scale) == 0 {
         fmt.Printf("%d requests, %d deleted\n", totalCount, deleteCount)
@@ -274,25 +279,26 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done c
   }
 }
 
+func (c *AutoscaleClient) AnalyzeMetrics(cinfo *v1.ContainerInfo) {
+  stats := cinfo.Stats
+  begin := stats[0]
+  end := stats[len(stats)-1]
+  duration := end.Timestamp.Sub(begin.Timestamp)
+
+  // compute cpu load
+  //averageCpuPercent := (end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / uint64(duration) * 100
+
+  fmt.Printf("%v %v\n", time.Duration(int(end.Cpu.Usage.Total - begin.Cpu.Usage.Total)) * time.Nanosecond, duration)
+}
+
 // delete metrics outside of the time window
 func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) (deleteCount int) {
-  // purge metrics outside the period
-  // windowStart := time.Now().Add(-1 * c.Period)
-
-  for {
-    // we assume that stats are ordered by time
-    window := StatsWindow(cinfo.Stats, 1, 100 * time.Millisecond)
-
+  precision := 100 * time.Millisecond
+  for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; deleteCount += 1 {
     //if !cinfo.Stats[0].Timestamp.Before(windowStart) || window > 0 && window < c.Period {
-    if window < c.Period {
-      break
-    }
-
     // fmt.Printf("  Deleting %v from %s\n", cinfo.Stats[0].Timestamp, cinfo.Labels["io.rancher.container.name"])
     cinfo.Stats = append(cinfo.Stats[:0], cinfo.Stats[1:]...)
-    deleteCount += 1
   }
-
   return
 }
 
