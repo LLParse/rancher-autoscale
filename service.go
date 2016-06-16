@@ -6,16 +6,11 @@ import (
   "log"
   "time"
   "strings"
-  //"net/http"
-  //"io/ioutil"
-  //"encoding/json"
-  //"golang.org/x/net/websocket"
   "github.com/urfave/cli"
   "github.com/google/cadvisor/client"
   "github.com/google/cadvisor/info/v1"
   rclient "github.com/rancher/go-rancher/client"
   "github.com/rancher/go-rancher-metadata/metadata"
-  //rclient "github.com/rancher/go-rancher/client"
 )
 
 const (
@@ -478,60 +473,3 @@ func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, me
     c.requestCount += 1
   }
 }
-
-
-  //  curl -s -u $CATTLE_ACCESS_KEY:$CATTLE_SECRET_KEY $CATTLE_URL/projects | jq -r .data[].id
-  /*client, err := rclient.NewRancherClient(&rclient.ClientOpts{
-    Url:       c.String("url"),
-    AccessKey: c.String("access-key"),
-    SecretKey: c.String("secret-key"),
-  })
-  if err != nil {
-    log.Fatalln(err)
-  }
-
-  serviceFilter := make(map[string]interface{})
-  serviceFilter["name"] = serviceName
-  serviceCollection, err := client.Service.List(&rclient.ListOpts{
-    Filters: serviceFilter,
-  })
-  if len(serviceCollection.Data) > 1 {
-    log.Fatalln("Service name wasn't unique:", serviceName)
-  }
-  service := serviceCollection.Data[0]
-  statsUrl := fmt.Sprintf("%s/projects/%s/services/%s/containerstats", c.String("url"), service.AccountId, service.Id)
-  fmt.Println(statsUrl)
-  
-  // get stats
-  resp, err := http.Get(statsUrl)
-  if err != nil {
-    log.Fatalln(err)
-  }
-  defer resp.Body.Close()
-
-  body, err := ioutil.ReadAll(resp.Body)
-  if err != nil {
-    log.Fatalln(err)
-  }
-
-  kv := make(map[string]interface{})
-  if err := json.Unmarshal(body, &kv); err != nil {
-    log.Fatalln(err)
-  }
-
-  wsendpoint := kv["url"].(string) + "?token=" + kv["token"].(string)
-  ws, err := websocket.Dial(wsendpoint, "", statsUrl)
-  if err != nil {
-    log.Fatalln(err)
-  }
-  defer ws.Close()
-
-  var msg = make([]byte, 65536)
-  var n int
-  if n, err = ws.Read(msg); err != nil {
-      log.Fatal(err)
-  }
-  fmt.Printf("Received: %s.\n", msg[:n])
-
-
-  os.Exit(0)*/
