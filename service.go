@@ -34,22 +34,22 @@ func ServiceCommand() cli.Command {
     Action: ScaleService,
     Flags: []cli.Flag{
       cli.Float64Flag{
-        Name:  "cpumin",
+        Name:  "min-cpu",
         Usage: "Minimum CPU usage threshold in percent",
         Value: 0,
       },
       cli.Float64Flag{
-        Name:  "cpumax",
+        Name:  "max-cpu",
         Usage: "Maximum CPU usage threshold in percent",
         Value: 100,
       },
       cli.Float64Flag{
-        Name:  "memmin",
+        Name:  "min-mem",
         Usage: "Minimum Memory usage threshold in MiB",
         Value: 0,
       },
       cli.Float64Flag{
-        Name:  "memmax",
+        Name:  "max-mem",
         Usage: "Memory Usage threshold in percent",
         Value: 4096,
       },

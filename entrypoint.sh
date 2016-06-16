@@ -10,6 +10,11 @@ CONTAINER_WARMUP=${CONTAINER_WARMUP:-1m0s}
 CONTAINER_COOLDOWN=${CONTAINER_COOLDOWN:-1m0s}
 VERBOSE=${VERBOSE:-false}
 
+if [ "$SERVICE" == "" ]; then
+  echo No stack/service read from SERVICE environment variable
+  exit 1
+fi
+
 if [ "$BOTH_THRESHOLDS" == "true" ]; then
   EXTRAFLAGS="$EXTRAFLAGS --and"
 fi

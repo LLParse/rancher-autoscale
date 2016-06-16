@@ -4,6 +4,7 @@ autoscale:
     io.rancher.container.create_agent: 'true'
     io.rancher.container.agent.role: environment
   environment:
+    SERVICE: ${SERVICE}
     MIN_CPU_THRESHOLD_PCT: ${MIN_CPU_THRESHOLD_PCT}
     MAX_CPU_THRESHOLD_PCT: ${MAX_CPU_THRESHOLD_PCT}
     MIN_MEM_THRESHOLD_MIB: ${MIN_MEM_THRESHOLD_MIB}

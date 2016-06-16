@@ -29,13 +29,13 @@
     label: Min Memory Threshold (MiB)
     required: true
     type: int
-    default: 90
+    default: 0
   - variable: MAX_MEM_THRESHOLD_MIB
     description: Launch a container when average Memory utilization meets or exceeds (>=) a certain size
     label: Max Memory Threshold (MiB)
     required: true
     type: int
-    default: 90
+    default: 4096
   - variable: BOTH_THRESHOLDS
     description: Both CPU/Memory thresholds must be met
     label: Meet Both Thresholds
