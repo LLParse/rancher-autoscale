@@ -39,3 +39,14 @@ bootstrap:
     io.rancher.container.start_once: 'true'
   environment:
     ETCDCTL_ENDPOINT: http://etcd:2379
+autoscale:
+  image: rancher/autoscale:v0.0.1
+  command: |
+    service etcd/etcd
+      --cpu 50
+      --mem 512
+      --period 15s
+      --warmup 5s
+  labels:
+    io.rancher.container.create_agent: 'true'
+    io.rancher.container.agent.role: environment
