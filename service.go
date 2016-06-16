@@ -240,43 +240,27 @@ func (c *AutoscaleClient) PollService(done chan<- bool) error {
 // process incoming metrics
 func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done chan bool) {
   // container ID
-  infoMap := make(map[string]*v1.ContainerInfo)
+  cinfo := make(map[string]*v1.ContainerInfo)
   totalCount := 0
+  deleteCount := 0
+  fmt.Println("Started processing metrics")
   for {
     select {
     case metric := <-metrics:
-      if _, exists := infoMap[metric.Id]; !exists {
-        infoMap[metric.Id] = &metric
+      if _, exists := cinfo[metric.Id]; !exists {
+        cinfo[metric.Id] = &metric
       } else {
-        // let's assume we never see a duplicate
-
         // append new metrics
-        infoMap[metric.Id].Stats = append(infoMap[metric.Id].Stats, metric.Stats...)
+        cinfo[metric.Id].Stats = append(cinfo[metric.Id].Stats, metric.Stats...)
 
-        // purge metrics outside the period
-        windowStart := time.Now().Add(-1 * c.Period)
-
-        // create a copy of the stats, this may be expensive
-        tmpStats := infoMap[metric.Id].Stats
-
-        for _, stat := range tmpStats {
-          // we assume that stats are ordered by time
-          if !stat.Timestamp.Before(windowStart) {
-            break
-          }
-          // sanity check
-          if !stat.Eq(infoMap[metric.Id].Stats[0]) {
-            log.Fatalln("Error in sliding window impl")
-          }
-          // delete the oldest metric preserving order
-          fmt.Printf("  Deleting %v from %s\n", infoMap[metric.Id].Stats[0].Timestamp, infoMap[metric.Id].Id)
-          infoMap[metric.Id].Stats = append(infoMap[metric.Id].Stats[:0], infoMap[metric.Id].Stats[1:]...)
-        }
+        // delete old metrics
+        deleteCount += c.DeleteOldMetrics(cinfo[metric.Id])
       }
       if totalCount += 1; totalCount % (10 * c.Service.Scale) == 0 {
-        fmt.Printf("Collected %d containerInfos\n", totalCount)
-        for _, info := range infoMap {
-          fmt.Printf("Container %s has %d datapoints\n", info.Id, len(info.Stats))
+        fmt.Printf("%d requests, %d deleted\n", totalCount, deleteCount)
+        for _, info := range cinfo {
+          fmt.Printf("  %s: %d metrics, %v window\n", info.Labels["io.rancher.container.name"], 
+            len(info.Stats), StatsWindow(info.Stats, 0, 100 * time.Millisecond))
           /*for _, stat := range info.Stats {
             fmt.Printf("  %v\n", stat)
           }*/
@@ -284,25 +268,39 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done c
       }
     case <-done:
       done<-true
-      /*fmt.Printf("Draining metrics")
-      ticks := 0
-      for _ = range time.Tick(100 * time.Millisecond) {
-        for {
-          select {
-          case <-metrics:
-            log.Printf("Drained", metrics)
-          default:
-            break
-          }
-        }
-        if ticks += 1; ticks == 10 {
-          break
-        }
-      }*/
-      fmt.Printf("Stopped processing all metrics")
+      fmt.Println("Stopped processing metrics")
       return
     }
   }
+}
+
+// delete metrics outside of the time window
+func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) (deleteCount int) {
+  // purge metrics outside the period
+  // windowStart := time.Now().Add(-1 * c.Period)
+
+  for {
+    // we assume that stats are ordered by time
+    window := StatsWindow(cinfo.Stats, 1, 100 * time.Millisecond)
+
+    //if !cinfo.Stats[0].Timestamp.Before(windowStart) || window > 0 && window < c.Period {
+    if window < c.Period {
+      break
+    }
+
+    // fmt.Printf("  Deleting %v from %s\n", cinfo.Stats[0].Timestamp, cinfo.Labels["io.rancher.container.name"])
+    cinfo.Stats = append(cinfo.Stats[:0], cinfo.Stats[1:]...)
+    deleteCount += 1
+  }
+
+  return
+}
+
+func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) time.Duration {
+  if len(stats) < 2 {
+    return time.Duration(0)
+  }
+  return stats[len(stats)-1].Timestamp.Round(round).Sub(stats[offset].Timestamp.Round(round))
 }
 
 // poll cAdvisor continuously for container metrics
@@ -329,7 +327,7 @@ func PollContinuously(containerId string, hostIp string, metrics chan<- v1.Conta
       Start: start,
     })
     if err != nil {
-      log.Fatalln(err)
+      fmt.Println(err)
     }
 
     start = newStart
