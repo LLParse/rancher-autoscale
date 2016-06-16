@@ -1,5 +1,5 @@
 etcd:
-  image: rancher/etcd:v2.3.6
+  image: llparse/etcd:v2.3.6-autoscale
   labels:
     io.rancher.scheduler.affinity:container_label_soft_ne: io.rancher.stack_service.name=$${stack_name}/$${service_name}
     io.rancher.sidekicks: data
@@ -15,7 +15,7 @@ etcd:
     - data
 # containerize data volume to enable restarts and upgrades
 data:
-  image: busybox
+  image: alpine:3.3
   command: /bin/true
   net: none
   volumes:
@@ -25,13 +25,13 @@ data:
 # Discovery containers are used for bootstrapping a cluster.
 # They will shutdown once the bootstrap process is completed.
 discovery:
-  image: rancher/etcd:v2.3.6
+  image: llparse/etcd:v2.3.6-autoscale
   command: discovery_node
   labels:
     io.rancher.container.start_once: 'true'
     io.rancher.sidekicks: bootstrap
 bootstrap:
-  image: rancher/etcd:v2.3.6
+  image: llparse/etcd:v2.3.6-autoscale
   command: bootstrap
   links:
   - discovery
