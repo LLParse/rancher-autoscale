@@ -47,6 +47,8 @@ autoscale:
       --mem 512
       --period 15s
       --warmup 5s
+  links:
+  - etcd
   labels:
     io.rancher.container.create_agent: 'true'
     io.rancher.container.agent.role: environment
