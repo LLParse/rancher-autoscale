@@ -53,7 +53,7 @@ func ServiceCommand() cli.Command {
         Usage: "Memory Usage threshold in percent",
         Value: 4096,
       },
-      cli.BoolFlag{
+      cli.StringFlag{
         Name:  "and",
         Usage: "Both CPU and Memory minimum or maximum thresholds must be met",
       },
@@ -72,7 +72,7 @@ func ServiceCommand() cli.Command {
         Usage: "",
         Value: 60 * time.Second,
       },
-      cli.BoolFlag{
+      cli.StringFlag{
         Name:  "verbose, v",
         Usage: "Enable verbose logging output",
       },
@@ -106,15 +106,15 @@ type AutoscaleClient struct {
   MinMemThreshold float64
   MaxMemThreshold float64
   And             bool
-  Warmup          time.Duration
   Period          time.Duration
+  Warmup          time.Duration
+  Cooldown        time.Duration
   Verbose         bool
 
   mClient         *metadata.Client
   mContainers     []metadata.Container
   mHosts          []metadata.Host
   CContainers     []v1.ContainerInfo
-  ContainerHosts  map[string]metadata.Host
   cInfoMap        map[string]*v1.ContainerInfo
   requestCount    int
   deleteCount     int
@@ -161,14 +161,15 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
   client := &AutoscaleClient{
     StackName: stackName,
     Service: service,
-    MinCpuThreshold: c.Float64("mincpu"),
-    MaxCpuThreshold: c.Float64("maxcpu"),
-    MinMemThreshold: c.Float64("minmem"),
-    MaxMemThreshold: c.Float64("maxmem"),
-    And: c.Bool("and"),
-    Warmup: c.Duration("warmup"),
+    MinCpuThreshold: c.Float64("min-cpu"),
+    MaxCpuThreshold: c.Float64("max-cpu"),
+    MinMemThreshold: c.Float64("min-mem"),
+    MaxMemThreshold: c.Float64("max-mem"),
+    And: c.String("and") == "true",
     Period: c.Duration("period"),
-    Verbose: c.Bool("verbose"),
+    Warmup: c.Duration("warmup"),
+    Cooldown: c.Duration("cooldown"),
+    Verbose: c.String("verbose") == "true",
     mClient: mclient,
     mContainers: rcontainers,
     mHosts: rhosts,
@@ -189,7 +190,6 @@ func ScaleService(c *cli.Context) error {
 }
 
 func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Container, hosts []metadata.Host) error {
-  c.ContainerHosts = make(map[string]metadata.Host)
   var cinfo []v1.ContainerInfo
 
   metrics := make(chan v1.ContainerInfo)
@@ -213,7 +213,6 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
       for _, rancherContainer := range rancherContainers {
         if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
           cinfo = append(cinfo, container)
-          c.ContainerHosts[container.Id] = host
           go c.PollContinuously(container.Id, host.AgentIP, metrics, done)
 
           // spread out the requests evenly

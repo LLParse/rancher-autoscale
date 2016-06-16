@@ -1,16 +1,16 @@
 autoscale:
   image: rancher/autoscale:v0.0.1
+  command: |
+    service ${SERVICE}
+      --min-cpu ${MIN_CPU_THRESHOLD_PCT}
+      --max-cpu ${MAX_CPU_THRESHOLD_PCT}
+      --min-mem ${MIN_MEM_THRESHOLD_MIB}
+      --max-mem ${MAX_MEM_THRESHOLD_MIB}
+      --and ${AND}
+      --period ${THRESHOLD_PERIOD}
+      --warmup ${CONTAINER_WARMUP}
+      --cooldown ${CONTAINER_COOLDOWN}
+      --verbose ${VERBOSE}
   labels:
     io.rancher.container.create_agent: 'true'
     io.rancher.container.agent.role: environment
-  environment:
-    SERVICE: ${SERVICE}
-    MIN_CPU_THRESHOLD_PCT: ${MIN_CPU_THRESHOLD_PCT}
-    MAX_CPU_THRESHOLD_PCT: ${MAX_CPU_THRESHOLD_PCT}
-    MIN_MEM_THRESHOLD_MIB: ${MIN_MEM_THRESHOLD_MIB}
-    MAX_MEM_THRESHOLD_MIB: ${MAX_MEM_THRESHOLD_MIB}
-    BOTH_THRESHOLDS: ${BOTH_THRESHOLDS}
-    THRESHOLD_PERIOD: ${THRESHOLD_PERIOD}
-    CONTAINER_WARMUP: ${CONTAINER_WARMUP}
-    CONTAINER_COOLDOWN: ${CONTAINER_COOLDOWN}
-    VERBOSE: ${VERBOSE}
