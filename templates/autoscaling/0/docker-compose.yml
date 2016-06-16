@@ -6,7 +6,7 @@ autoscale:
       --max-cpu ${MAX_CPU_THRESHOLD_PCT}
       --min-mem ${MIN_MEM_THRESHOLD_MIB}
       --max-mem ${MAX_MEM_THRESHOLD_MIB}
-      --and ${AND}
+      --and ${BOTH_THRESHOLDS}
       --period ${THRESHOLD_PERIOD}
       --warmup ${CONTAINER_WARMUP}
       --cooldown ${CONTAINER_COOLDOWN}
