@@ -13,6 +13,7 @@ import (
   "github.com/urfave/cli"
   "github.com/google/cadvisor/client"
   "github.com/google/cadvisor/info/v1"
+  rclient "github.com/rancher/go-rancher/client"
   "github.com/rancher/go-rancher-metadata/metadata"
   //rclient "github.com/rancher/go-rancher/client"
 )
@@ -99,6 +100,9 @@ type AutoscaleClient struct {
   // configuration argument
   StackName       string
   Service         metadata.Service
+
+  RClient         *rclient.RancherClient
+  RService        *rclient.Service
   
   // configuration parameters
   MinCpuThreshold float64
@@ -118,6 +122,8 @@ type AutoscaleClient struct {
   cInfoMap        map[string]*v1.ContainerInfo
   requestCount    int
   deleteCount     int
+
+  done            chan bool
 }
 
 func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
@@ -158,9 +164,32 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
     fmt.Println(" ", host.Name)
   }
 
+  rcli, err := rclient.NewRancherClient(&rclient.ClientOpts{
+    Url:       c.String("url"),
+    AccessKey: c.String("access-key"),
+    SecretKey: c.String("secret-key"),
+  })
+  if err != nil {
+    log.Fatalln(err)
+  }
+
+  services, err := rcli.Service.List(&rclient.ListOpts{
+    Filters: map[string]interface{}{
+      "uuid": service.UUID,
+    },
+  })
+  if err != nil {
+    log.Fatalln(err)
+  }
+  if len(services.Data) > 1 {
+    log.Fatalln("Multiple services returned with UUID", service.UUID)
+  }
+
   client := &AutoscaleClient{
     StackName: stackName,
     Service: service,
+    RClient: rcli,
+    RService: &services.Data[0],
     MinCpuThreshold: c.Float64("min-cpu"),
     MaxCpuThreshold: c.Float64("max-cpu"),
     MinMemThreshold: c.Float64("min-mem"),
@@ -174,6 +203,7 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
     mContainers: rcontainers,
     mHosts: rhosts,
     cInfoMap: make(map[string]*v1.ContainerInfo),
+    done: make(chan bool),
   }
 
   // get cadvisor containers
@@ -193,9 +223,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
   var cinfo []v1.ContainerInfo
 
   metrics := make(chan v1.ContainerInfo)
-  done := make(chan bool)
   defer close(metrics)
-  defer close(done)
 
   for _, host := range hosts {
     address := "http://" + host.AgentIP + ":9244/"
@@ -213,7 +241,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
       for _, rancherContainer := range rancherContainers {
         if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
           cinfo = append(cinfo, container)
-          go c.PollContinuously(container.Id, host.AgentIP, metrics, done)
+          go c.PollContinuously(container.Id, host.AgentIP, metrics)
 
           // spread out the requests evenly
           time.Sleep(time.Duration(int(pollCadvisorInterval) / c.Service.Scale))
@@ -230,46 +258,45 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
   c.CContainers = cinfo
 
   fmt.Printf("Monitoring service '%s' in stack '%s'\n", c.Service.Name, c.StackName)
-  go c.ProcessMetrics(metrics, done)
+  go c.ProcessMetrics(metrics)
+  c.PollMetadataChanges()
 
-  return c.PollService(done)
+  return nil
 }
 
 // indefinitely poll for service scale changes
-func (c *AutoscaleClient) PollService(done chan<- bool) error {
+func (c *AutoscaleClient) PollMetadataChanges() {
   for {
     time.Sleep(pollMetadataInterval)
 
     service, err := c.mClient.GetServiceByName(c.StackName, c.Service.Name)
     if err != nil {
-      return err
+      log.Println(err)
     }
 
     // if the service is scaled up/down, we accomplished our goal
-    if service.Scale > c.Service.Scale {
-      fmt.Printf("Detected scale up: %d -> %d\n", c.Service.Scale, service.Scale)
-      done<-true
-      fmt.Printf("Waiting %v for container to warm up.\n", c.Warmup)
-      time.Sleep(c.Warmup)
-      fmt.Println("Exiting")
-      return nil
-
-    } else if service.Scale < c.Service.Scale {
-      fmt.Printf("Detected scale down: %d -> %d\n", c.Service.Scale, service.Scale)
-      done<-true
-      // maybe we need to cool down for certain types of software?
-      fmt.Println("Exiting")
-      return nil
+    if service.Scale != c.Service.Scale {
+      select {
+      case <-c.done:
+        // already shutting down, we caused the scale change
+      default:
+        fmt.Printf("Detected scale up: %d -> %d\n", c.Service.Scale, service.Scale)
+      }
+      c.done <- true
+      break
     }
   }
-  return nil
 }
 
 // process incoming metrics
-func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done chan bool) {
+func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
   fmt.Println("Started processing metrics")
   for {
     select {
+    case <-c.done:
+      c.done <- true
+      fmt.Println("Stopped processing metrics")
+      return
     case metric := <-metrics:
       if _, exists := c.cInfoMap[metric.Id]; !exists {
         c.cInfoMap[metric.Id] = &metric
@@ -278,22 +305,14 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo, done c
         c.cInfoMap[metric.Id].Stats = append(c.cInfoMap[metric.Id].Stats, metric.Stats...)
 
         if len(c.cInfoMap[metric.Id].Stats) >= 2 {
-          // delete old metrics
           c.DeleteOldMetrics(c.cInfoMap[metric.Id])
-
-          // analyze metrics
-          c.AnalyzeMetrics(c.cInfoMap[metric.Id])
-
+          c.AnalyzeMetrics()
         }
       }
       // print statistics every 10 seconds
       if c.requestCount % (10 * c.Service.Scale) == 0 {
         c.PrintStatistics()
       }
-    case <-done:
-      done<-true
-      fmt.Println("Stopped processing metrics")
-      return
     }
   }
 }
@@ -310,29 +329,105 @@ func (c *AutoscaleClient) PrintStatistics() {
 }
 
 // analyze metric window and trigger scale operations
-func (c *AutoscaleClient) AnalyzeMetrics(cinfo *v1.ContainerInfo) {
-  stats := cinfo.Stats
-  begin := stats[0]
-  end := stats[len(stats)-1]
-  duration := end.Timestamp.Sub(begin.Timestamp)
+func (c *AutoscaleClient) AnalyzeMetrics() {
+  // average cumulative CPU usage (over configured period)
+  averageCpu := float64(0)
+  // average cumulative RAM usage (instantaneous) maybe should be avg over time
+  averageMem := float64(0)
 
-  // don't compute anything until we have enough metrics
-  if duration < c.Period {
-    return
+  for _, cinfo := range c.cInfoMap {
+    stats := cinfo.Stats
+
+    // we absolutely need two or more metrics to look at a time window
+    if len(stats) < 2 {
+      return
+    }
+
+    begin := stats[0]
+    end := stats[len(stats)-1]
+    duration := end.Timestamp.Sub(begin.Timestamp)
+
+    // we absolutely need a full time window to make decisions
+    if duration < c.Period {
+      return
+    }
+
+    averageCpu += float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / float64(duration) * 100
+    averageMem += float64(end.Memory.Usage)
   }
 
-  // compute average CPU over entire window
-  containerAverageCpu := float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / float64(duration) * 100
+  averageCpu /= float64(c.Service.Scale)
+  averageMem = averageMem / float64(c.Service.Scale) / 1024 / 1024
 
-  // compute
+  fmt.Printf("avg cpu: %5.1f%%, avg mem: %7.1fMiB\n", averageCpu, averageMem)
 
-  fmt.Printf("avg cpu: %v%%, start mem: %v, stop mem: %v\n", containerAverageCpu, begin.Memory.Usage, end.Memory.Usage)
-
-  // make decisions
-  if containerAverageCpu >= c.MaxCpuThreshold {
-    fmt.Println("*** Trigger scale up")
+  // all conditions must be met
+  if c.And {
+    if averageCpu >= c.MaxCpuThreshold && averageMem >= c.MaxMemThreshold {
+      c.ScaleUp()
+    }
+    if averageCpu <= c.MinCpuThreshold && averageMem <= c.MinMemThreshold {
+      c.ScaleDown()
+    }    
+  // any condition must be met
+  } else {
+    if averageCpu >= c.MaxCpuThreshold || averageMem >= c.MaxMemThreshold {
+      c.ScaleUp()
+    }
+    if averageCpu <= c.MinCpuThreshold || averageMem <= c.MinMemThreshold {
+      c.ScaleDown()
+    }
   }
 }
+
+func (c *AutoscaleClient) ScaleUp() {
+  c.Scale(1)
+}
+
+func (c *AutoscaleClient) ScaleDown() {
+  c.Scale(-1)
+}
+
+func (c *AutoscaleClient) Scale(offset int64) {
+  var adjective string
+  var delay time.Duration
+
+  if offset > 0 {
+    adjective = "up"
+    delay = c.Warmup
+  } else {
+    adjective = "down"
+    delay = c.Cooldown
+  }
+
+  newScale := c.RService.Scale + offset
+
+  fmt.Printf("Triggered scale %s: %d -> %d\n", adjective, c.RService.Scale, newScale)
+
+  // sometimes Rancher takes ages to respond so do this async
+  go func() {
+    _, err := c.RClient.Service.Update(c.RService, map[string]interface{}{
+      "scale": newScale,
+    })
+    if err != nil {
+      log.Fatalln(err)
+    }
+  }()
+
+  // process completes when we scale
+  c.done <- true
+
+  // warmup or cooldown
+  if offset < 0 {
+    fmt.Printf("Cooling down for %v\n", delay)
+  } else {
+    fmt.Printf("Warming up for %v\n", delay)
+  }
+  time.Sleep(delay)
+
+  fmt.Println("Exiting")
+}
+
 
 // delete metrics outside of the time window
 func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) {
@@ -352,7 +447,7 @@ func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) ti
 }
 
 // poll cAdvisor continuously for container metrics
-func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo, done chan bool) {
+func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo) {
   address := "http://" + hostIp + ":9244/"
   cli, err := client.NewClient(address)
   if err != nil {
@@ -362,8 +457,8 @@ func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, me
   start := time.Now()
   for {
     select {
-    case <-done:
-      done<-true
+    case <-c.done:
+      c.done <- true
       fmt.Printf("Stopped collecting metrics for container %s", containerId)
       return
     default:
