@@ -17,9 +17,9 @@ const (
   // Rancher metadata endpoint URL 
   metadataUrl = "http://rancher-metadata.rancher.internal/2015-12-19"
   // interval at which each goroutine polls cAdvisor for metrics
-  pollCadvisorInterval = 1 * time.Second
+  pollCadvisorInterval = 2 * time.Second
   // interval at which to poll metadata
-  pollMetadataInterval = 15 * time.Second
+  pollMetadataInterval = 10 * time.Second
   // interval at which to print statistics
   printStatisticsInterval = 10 * time.Second
   // interval at which to analyze metrics, should be >= pollCadvisorInterval
@@ -120,7 +120,8 @@ type AutoscaleContext struct {
   CContainers     []v1.ContainerInfo
   cInfoMap        map[string]*v1.ContainerInfo
   requestCount    int
-  deleteCount     int
+  addedCount      int
+  deletedCount    int
 
   done            chan bool
 }
@@ -303,6 +304,7 @@ func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
         c.cInfoMap[metric.Id] = &metric
       } else {
         // append new metrics
+        c.addedCount += len(metric.Stats)
         c.cInfoMap[metric.Id].Stats = append(c.cInfoMap[metric.Id].Stats, metric.Stats...)
 
         if len(c.cInfoMap[metric.Id].Stats) >= 2 {
@@ -317,7 +319,9 @@ func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
 
 func (c *AutoscaleContext) PrintStatistics() {
   if c.requestCount % (int(printStatisticsInterval / pollCadvisorInterval) * c.Service.Scale) == 0 {
-    fmt.Printf("requests: %d, deleted: %d\n", c.requestCount, c.deleteCount)
+    fmt.Printf("added: %d, deleted: %d, in-memory: %d, requests: %d\n", 
+      c.addedCount, c.deletedCount, c.addedCount - c.deletedCount, c.requestCount)
+
     if c.Verbose {
       for _, info := range c.cInfoMap {
         metrics := len(info.Stats)
@@ -440,7 +444,7 @@ func (c *AutoscaleContext) Scale(offset int64) {
 // delete metrics outside of the time window
 func (c *AutoscaleContext) DeleteOldMetrics(cinfo *v1.ContainerInfo) {
   precision := 100 * time.Millisecond
-  for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; c.deleteCount += 1 {
+  for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; c.deletedCount += 1 {
     //if !cinfo.Stats[0].Timestamp.Before(windowStart) || window > 0 && window < c.Period {
     // fmt.Printf("  Deleting %v from %s\n", cinfo.Stats[0].Timestamp, cinfo.Labels["io.rancher.container.name"])
     cinfo.Stats = append(cinfo.Stats[:0], cinfo.Stats[1:]...)
