@@ -1,4 +1,5 @@
 .catalog:
+  name: Messageboard
   version: v1.0
   minimum_rancher_version: v1.1.0-dev5
 nginx:
@@ -12,4 +13,4 @@ messageboard-lb:
     interval: 2000
     unhealthy_threshold: 3
     healthy_threshold: 2
-response_timeout: 2000
+    response_timeout: 2000
