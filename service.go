@@ -16,10 +16,14 @@ import (
 const (
   // Rancher metadata endpoint URL 
   metadataUrl = "http://rancher-metadata.rancher.internal/2015-12-19"
-  // interval at which to poll cAdvisor for metrics
+  // interval at which each goroutine polls cAdvisor for metrics
   pollCadvisorInterval = 1 * time.Second
-  // interval at which to poll metadata for scale changes
+  // interval at which to poll metadata
   pollMetadataInterval = 15 * time.Second
+  // interval at which to print statistics
+  printStatisticsInterval = 10 * time.Second
+  // interval at which to analyze metrics, should be >= pollCadvisorInterval
+  analyzeMetricsInterval = 2 * time.Second
 )
 
 func ServiceCommand() cli.Command {
@@ -91,7 +95,7 @@ func ServiceCommand() cli.Command {
   }
 }
 
-type AutoscaleClient struct {
+type AutoscaleContext struct {
   // configuration argument
   StackName       string
   Service         metadata.Service
@@ -121,7 +125,7 @@ type AutoscaleClient struct {
   done            chan bool
 }
 
-func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
+func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
   stackservice := c.Args().First()
   if stackservice == "" {
     cli.ShowCommandHelp(c, "service")
@@ -138,25 +142,16 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
   if err != nil {
     log.Fatalln(err)
   }
-  fmt.Println("Service:", service.Name)
 
   rcontainers, err := mclient.GetServiceContainers(serviceName, stackName)
   if err != nil {
     log.Fatalln(err)
-  }
-  fmt.Println("Containers:")
-  for _, container := range rcontainers {
-    fmt.Println(" ", container.Name)
   }
 
   // get rancher hosts
   rhosts, err := mclient.GetContainerHosts(rcontainers)
   if err != nil {
     log.Fatalln(err)
-  }
-  fmt.Println("Rancher Hosts:")
-  for _, host := range rhosts {
-    fmt.Println(" ", host.Name)
   }
 
   rcli, err := rclient.NewRancherClient(&rclient.ClientOpts{
@@ -180,7 +175,7 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
     log.Fatalln("Multiple services returned with UUID", service.UUID)
   }
 
-  client := &AutoscaleClient{
+  client := &AutoscaleContext{
     StackName: stackName,
     Service: service,
     RClient: rcli,
@@ -201,26 +196,36 @@ func NewAutoscaleClient(c *cli.Context) *AutoscaleClient {
     done: make(chan bool),
   }
 
-  // get cadvisor containers
-  if err := client.GetCadvisorContainers(rcontainers, rhosts); err != nil {
-    log.Fatalln(err)
+  fmt.Printf("Monitoring '%s' service in '%s' stack, %d containers across %d hosts\n", 
+    serviceName, stackName, len(rcontainers), len(rhosts))
+  if client.Verbose {
+    fmt.Println("Container Information:")
+    for _, container := range rcontainers {
+      fmt.Printf("\t(%s) %v\n", container.Name, container)
+    }
+    fmt.Println("Host Information:")
+    for _, host := range rhosts {
+      fmt.Printf("\t(%s) %v\n", host.Name, host)
+    }
   }
+
+  // get cadvisor containers
 
   return client
 }
 
 func ScaleService(c *cli.Context) error {
-  NewAutoscaleClient(c)
-  return nil
+  ctx := NewAutoscaleContext(c)
+  return ctx.GetCadvisorContainers()
 }
 
-func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Container, hosts []metadata.Host) error {
+func (c *AutoscaleContext) GetCadvisorContainers() error {
   var cinfo []v1.ContainerInfo
 
   metrics := make(chan v1.ContainerInfo)
   defer close(metrics)
 
-  for _, host := range hosts {
+  for _, host := range c.mHosts {
     address := "http://" + host.AgentIP + ":9244/"
     cli, err := client.NewClient(address)
     if err != nil {
@@ -233,7 +238,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
     }
 
     for _, container := range containers {
-      for _, rancherContainer := range rancherContainers {
+      for _, rancherContainer := range c.mContainers {
         if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
           cinfo = append(cinfo, container)
           go c.PollContinuously(container.Id, host.AgentIP, metrics)
@@ -260,7 +265,7 @@ func (c *AutoscaleClient) GetCadvisorContainers(rancherContainers []metadata.Con
 }
 
 // indefinitely poll for service scale changes
-func (c *AutoscaleClient) PollMetadataChanges() {
+func (c *AutoscaleContext) PollMetadataChanges() {
   for {
     time.Sleep(pollMetadataInterval)
 
@@ -278,13 +283,14 @@ func (c *AutoscaleClient) PollMetadataChanges() {
         fmt.Printf("Detected scale up: %d -> %d\n", c.Service.Scale, service.Scale)
       }
       c.done <- true
+      fmt.Printf("Exiting")
       break
     }
   }
 }
 
 // process incoming metrics
-func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
+func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
   fmt.Println("Started processing metrics")
   for {
     select {
@@ -304,27 +310,32 @@ func (c *AutoscaleClient) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
           c.AnalyzeMetrics()
         }
       }
-      // print statistics every 10 seconds
-      if c.requestCount % (10 * c.Service.Scale) == 0 {
-        c.PrintStatistics()
-      }
+      c.PrintStatistics()
     }
   }
 }
 
-func (c *AutoscaleClient) PrintStatistics() {
-  fmt.Printf("%d requests, %d deleted\n", c.requestCount, c.deleteCount)
-  for _, info := range c.cInfoMap {
-    fmt.Printf("  %s: %d metrics, %v window\n", info.Labels["io.rancher.container.name"], 
-      len(info.Stats), StatsWindow(info.Stats, 0, 100 * time.Millisecond))
-    /*for _, stat := range info.Stats {
-      fmt.Printf("  %v\n", stat)
-    }*/
-  }  
+func (c *AutoscaleContext) PrintStatistics() {
+  if c.requestCount % (int(printStatisticsInterval / pollCadvisorInterval) * c.Service.Scale) == 0 {
+    fmt.Printf("requests: %d, deleted: %d\n", c.requestCount, c.deleteCount)
+    if c.Verbose {
+      for _, info := range c.cInfoMap {
+        metrics := len(info.Stats)
+        window := StatsWindow(info.Stats, 0, 10 * time.Millisecond)
+
+        fmt.Printf("\t(%s) metrics: %d, window: %v, rate: %f/sec\n", info.Labels["io.rancher.container.name"], 
+          metrics, window, float64(metrics) / float64(window / time.Second))
+      }      
+    }
+  }
 }
 
 // analyze metric window and trigger scale operations
-func (c *AutoscaleClient) AnalyzeMetrics() {
+func (c *AutoscaleContext) AnalyzeMetrics() {
+  if c.requestCount % (int(analyzeMetricsInterval / pollCadvisorInterval) * c.Service.Scale) != 0 {
+    return
+  }
+
   // average cumulative CPU usage (over configured period)
   averageCpu := float64(0)
   // average cumulative RAM usage (instantaneous) maybe should be avg over time
@@ -348,6 +359,8 @@ func (c *AutoscaleClient) AnalyzeMetrics() {
     }
 
     averageCpu += float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / float64(duration) * 100
+
+    // FIXME (llparse) this needs to be an average
     averageMem += float64(end.Memory.Usage)
   }
 
@@ -375,15 +388,15 @@ func (c *AutoscaleClient) AnalyzeMetrics() {
   }
 }
 
-func (c *AutoscaleClient) ScaleUp() {
+func (c *AutoscaleContext) ScaleUp() {
   c.Scale(1)
 }
 
-func (c *AutoscaleClient) ScaleDown() {
+func (c *AutoscaleContext) ScaleDown() {
   c.Scale(-1)
 }
 
-func (c *AutoscaleClient) Scale(offset int64) {
+func (c *AutoscaleContext) Scale(offset int64) {
   var adjective string
   var delay time.Duration
 
@@ -425,7 +438,7 @@ func (c *AutoscaleClient) Scale(offset int64) {
 
 
 // delete metrics outside of the time window
-func (c *AutoscaleClient) DeleteOldMetrics(cinfo *v1.ContainerInfo) {
+func (c *AutoscaleContext) DeleteOldMetrics(cinfo *v1.ContainerInfo) {
   precision := 100 * time.Millisecond
   for ; StatsWindow(cinfo.Stats, 1, precision) >= c.Period; c.deleteCount += 1 {
     //if !cinfo.Stats[0].Timestamp.Before(windowStart) || window > 0 && window < c.Period {
@@ -442,7 +455,7 @@ func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) ti
 }
 
 // poll cAdvisor continuously for container metrics
-func (c *AutoscaleClient) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo) {
+func (c *AutoscaleContext) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo) {
   address := "http://" + hostIp + ":9244/"
   cli, err := client.NewClient(address)
   if err != nil {
