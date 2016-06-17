@@ -123,6 +123,7 @@ type AutoscaleContext struct {
   addedCount      int
   deletedCount    int
 
+  metrics         chan v1.ContainerInfo
   done            chan bool
 }
 
@@ -194,6 +195,7 @@ func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
     mContainers: rcontainers,
     mHosts: rhosts,
     cInfoMap: make(map[string]*v1.ContainerInfo),
+    metrics: make(chan v1.ContainerInfo),
     done: make(chan bool),
   }
 
@@ -217,15 +219,15 @@ func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
 
 func ScaleService(c *cli.Context) error {
   ctx := NewAutoscaleContext(c)
-  return ctx.GetCadvisorContainers()
+  if err := ctx.GetCadvisorContainers(); err != nil {
+    return err
+  }
+  go ctx.ProcessMetrics()
+  ctx.PollMetadataChanges()
+  return nil
 }
 
 func (c *AutoscaleContext) GetCadvisorContainers() error {
-  var cinfo []v1.ContainerInfo
-
-  metrics := make(chan v1.ContainerInfo)
-  defer close(metrics)
-
   for _, host := range c.mHosts {
     address := "http://" + host.AgentIP + ":9244/"
     cli, err := client.NewClient(address)
@@ -241,8 +243,8 @@ func (c *AutoscaleContext) GetCadvisorContainers() error {
     for _, container := range containers {
       for _, rancherContainer := range c.mContainers {
         if rancherContainer.Name == container.Labels["io.rancher.container.name"] {
-          cinfo = append(cinfo, container)
-          go c.PollContinuously(container.Id, host.AgentIP, metrics)
+          c.CContainers = append(c.CContainers, container)
+          go c.PollContinuously(container.Id, host.AgentIP)
 
           // spread out the requests evenly
           time.Sleep(time.Duration(int(pollCadvisorInterval) / c.Service.Scale))
@@ -251,17 +253,6 @@ func (c *AutoscaleContext) GetCadvisorContainers() error {
       }
     }
   }
-
-  fmt.Println("cAdvisor Containers:")
-  for _, container := range cinfo {
-    fmt.Println(" ", container.Name)
-  }
-  c.CContainers = cinfo
-
-  fmt.Printf("Monitoring service '%s' in stack '%s'\n", c.Service.Name, c.StackName)
-  go c.ProcessMetrics(metrics)
-  c.PollMetadataChanges()
-
   return nil
 }
 
@@ -291,7 +282,7 @@ func (c *AutoscaleContext) PollMetadataChanges() {
 }
 
 // process incoming metrics
-func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
+func (c *AutoscaleContext) ProcessMetrics() {
   fmt.Println("Started processing metrics")
   for {
     select {
@@ -299,7 +290,7 @@ func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
       c.done <- true
       fmt.Println("Stopped processing metrics")
       return
-    case metric := <-metrics:
+    case metric := <-c.metrics:
       if _, exists := c.cInfoMap[metric.Id]; !exists {
         c.cInfoMap[metric.Id] = &metric
       } else {
@@ -319,7 +310,7 @@ func (c *AutoscaleContext) ProcessMetrics(metrics <-chan v1.ContainerInfo) {
 
 func (c *AutoscaleContext) PrintStatistics() {
   if c.requestCount % (int(printStatisticsInterval / pollCadvisorInterval) * c.Service.Scale) == 0 {
-    fmt.Printf("added: %d, deleted: %d, in-memory: %d, requests: %d\n", 
+    fmt.Printf("added: %6d, deleted: %6d, in-memory: %5d, requests: %6d\n", 
       c.addedCount, c.deletedCount, c.addedCount - c.deletedCount, c.requestCount)
 
     if c.Verbose {
@@ -459,7 +450,7 @@ func StatsWindow(stats []*v1.ContainerStats, offset int, round time.Duration) ti
 }
 
 // poll cAdvisor continuously for container metrics
-func (c *AutoscaleContext) PollContinuously(containerId string, hostIp string, metrics chan<- v1.ContainerInfo) {
+func (c *AutoscaleContext) PollContinuously(containerId string, hostIp string) {
   address := "http://" + hostIp + ":9244/"
   cli, err := client.NewClient(address)
   if err != nil {
@@ -486,7 +477,7 @@ func (c *AutoscaleContext) PollContinuously(containerId string, hostIp string, m
     }
 
     start = newStart
-    metrics <- info
+    c.metrics <- info
     c.requestCount += 1
   }
 }
