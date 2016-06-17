@@ -16,7 +16,6 @@ web:
   volumes:
     - /usr/src/app/static
   command: '/usr/src/app/start_app.sh'
-  env_file: .env
   labels:
     io.rancher.container.hostname_override: "container_name"
     io.rancher.scheduler.affinity:host_label_soft: app=true
