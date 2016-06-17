@@ -1,27 +1,5 @@
-messageboard-lb:
-  ports:
-  - 80:80
-  tty: true
-  image: rancher/load-balancer-service
-  links:
-  - nginx:nginx
-  stdin_open: true
-  labels:
-    io.rancher.scheduler.affinity:host_label_soft: app=true
-
-web:
-  image: rancheriodhci/demo-web
-  expose:
-    - "8000"
-  volumes:
-    - /usr/src/app/static
-  command: '/usr/src/app/start_app.sh'
-  labels:
-    io.rancher.container.hostname_override: "container_name"
-    io.rancher.scheduler.affinity:host_label_soft: app=true
-
 nginx:
-  image: rancheriodhci/demo-nginx
+  image: rancheriodhci/demo-nginx:25
   links:
     - postgres:postgres
     - web:web
@@ -35,15 +13,17 @@ nginx:
     io.rancher.scheduler.affinity:host_label_soft: app=true
   command: /bin/sh -c "sleep 10 && /usr/sbin/nginx"
 
-postgres-data:
-  image: postgres:9.5.0
-  net: none
-  labels:
-    io.rancher.container.start_once: "true"
-    io.rancher.scheduler.affinity:host_label_soft: app=true
+web:
+  image: rancheriodhci/demo-web:25
+  expose:
+    - "8000"
   volumes:
-    - /var/lib/postgresql
-  command: "/bin/true"
+    - /usr/src/app/static
+  command: '/usr/src/app/start_app.sh'
+  labels:
+    io.rancher.container.hostname_override: "container_name"
+    io.rancher.scheduler.affinity:host_label_soft: app=true
+
 postgres:
   image: postgres:9.5.0
   volumes_from:
@@ -53,3 +33,13 @@ postgres:
   labels:
     io.rancher.sidekicks: postgres-data
     io.rancher.scheduler.affinity:host_label_soft: app=true
+
+postgres-data:
+  image: postgres:9.5.0
+  net: none
+  labels:
+    io.rancher.container.start_once: "true"
+    io.rancher.scheduler.affinity:host_label_soft: app=true
+  volumes:
+    - /var/lib/postgresql
+  command: "/bin/true"
