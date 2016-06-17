@@ -353,13 +353,15 @@ func (c *AutoscaleContext) AnalyzeMetrics() {
       return
     }
 
-    averageCpu += float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / float64(duration) * 100
+    averageCpu += float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / 
+        float64(duration) / float64(len(begin.Cpu.Usage.PerCpu)) * 100
 
     // FIXME (llparse) this needs to be an average
     averageMem += float64(end.Memory.Usage)
   }
 
   averageCpu /= float64(c.Service.Scale)
+  averageCpu = float64(int64(averageCpu * 10)) / 10
   averageMem = averageMem / float64(c.Service.Scale) / 1024 / 1024
 
   fmt.Printf("avg cpu: %5.1f%%, avg mem: %7.1fMiB\n", averageCpu, averageMem)
