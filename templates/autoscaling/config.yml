@@ -1,5 +1,5 @@
 name: Autoscaling
 description: |
-  Autoscale services based on mem/cpu resource usage
+  Autoscale services by resource usage
 version: v0.0.1
 category: Features

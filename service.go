@@ -20,9 +20,9 @@ const (
   pollCadvisorInterval = 2 * time.Second
   // interval at which to poll metadata
   pollMetadataInterval = 10 * time.Second
-  // interval at which to print statistics
+  // interval at which to print statistics, should be divisible by pollCadvisorInterval
   printStatisticsInterval = 10 * time.Second
-  // interval at which to analyze metrics, should be >= pollCadvisorInterval
+  // interval at which to analyze metrics,  should be divisible by pollCadvisorInterval
   analyzeMetricsInterval = 2 * time.Second
 )
 
@@ -331,10 +331,12 @@ func (c *AutoscaleContext) AnalyzeMetrics() {
     return
   }
 
-  // average cumulative CPU usage (over configured period)
-  averageCpu := float64(0)
-  // average cumulative RAM usage (instantaneous) maybe should be avg over time
-  averageMem := float64(0)
+  averageCpu := float64(0)      // average CPU usage (over configured period)
+  averageMem := float64(0)      // average RAM usage (instantaneous)
+  averageRxBytes := float64(0)  // total inbound network traffic
+  averageTxBytes := float64(0)  // total outbound network traffic
+
+  fullWindow := true
 
   for _, cinfo := range c.cInfoMap {
     stats := cinfo.Stats
@@ -348,23 +350,34 @@ func (c *AutoscaleContext) AnalyzeMetrics() {
     end := stats[len(stats)-1]
     duration := end.Timestamp.Sub(begin.Timestamp)
 
-    // we absolutely need a full time window to make decisions
-    if duration < c.Period {
-      return
-    }
+    fullWindow = fullWindow && (duration >= c.Period)
 
     averageCpu += float64(end.Cpu.Usage.Total - begin.Cpu.Usage.Total) / 
         float64(duration) / float64(len(begin.Cpu.Usage.PerCpu)) * 100
 
-    // FIXME (llparse) this needs to be an average
+    // TODO (llparse) determine if we should do averages across the window
+    // as this is an instantaneous measurement
     averageMem += float64(end.Memory.Usage)
+
+    averageRxBytes += float64(end.Network.InterfaceStats.RxBytes - begin.Network.InterfaceStats.RxBytes) / float64(duration / time.Second)
+    averageTxBytes += float64(end.Network.InterfaceStats.TxBytes - begin.Network.InterfaceStats.TxBytes) / float64(duration / time.Second)
+
+    // fmt.Printf("%s %v %+v\n", cinfo.Name, end.Timestamp, end.Network)
   }
 
   averageCpu /= float64(c.Service.Scale)
   averageCpu = float64(int64(averageCpu * 10)) / 10
   averageMem = averageMem / float64(c.Service.Scale) / 1024 / 1024
+  averageRx := averageRxBytes / float64(c.Service.Scale) / 1024
+  averageTx := averageTxBytes / float64(c.Service.Scale) / 1024
 
-  fmt.Printf("avg cpu: %5.1f%%, avg mem: %7.1fMiB\n", averageCpu, averageMem)
+  fmt.Printf("avg cpu: %5.1f%%, avg mem: %7.1fMiB, avg rx: %5.1fKiB/s, avg tx: %5.1fKiB/s\n",
+    averageCpu, averageMem, averageRx, averageTx)
+
+  // we absolutely need a full time window across all containers to make decisions
+  if !fullWindow {
+    return
+  }
 
   // all conditions must be met
   if c.And {
