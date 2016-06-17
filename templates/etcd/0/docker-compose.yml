@@ -13,6 +13,9 @@ etcd:
   - discovery
   volumes_from:
     - data
+  # 20% CPU time allocated per node
+  cpu_period: 100000
+  cpu_quota:  20000
 # containerize data volume to enable restarts and upgrades
 data:
   image: alpine:3.3
