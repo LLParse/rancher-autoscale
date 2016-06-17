@@ -53,4 +53,4 @@ postgres:
     - "5432"
   labels:
     io.rancher.sidekicks: postgres-data
-io.rancher.scheduler.affinity:host_label_soft: app=true
+    io.rancher.scheduler.affinity:host_label_soft: app=true
