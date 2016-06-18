@@ -1,0 +1,8 @@
+lb:
+  image: rancher/haproxy-tomcat:v0.0.1
+  ports:
+  - 80:80
+tomcat:
+  image: tomcat:8.0
+  ports:
+  - 8080

@@ -1,0 +1,9 @@
+tomcat:
+  scale: 3
+  health_check:
+    port: 8080
+    interval: 5000
+    unhealthy_threshold: 2
+    request_line: '/'
+    healthy_threshold: 2
+    response_timeout: 5000
