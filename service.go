@@ -362,7 +362,7 @@ func (c *AutoscaleContext) AnalyzeMetrics() {
     averageRxBytes += float64(end.Network.InterfaceStats.RxBytes - begin.Network.InterfaceStats.RxBytes) / float64(duration / time.Second)
     averageTxBytes += float64(end.Network.InterfaceStats.TxBytes - begin.Network.InterfaceStats.TxBytes) / float64(duration / time.Second)
 
-    // fmt.Printf("%s %v %+v\n", cinfo.Name, end.Timestamp, end.Network)
+    // fmt.Printf("%s %v %+v\n", cinfo.Name, end.Timestamp, end.DiskIo)
   }
 
   averageCpu /= float64(c.Service.Scale)
@@ -420,7 +420,13 @@ func (c *AutoscaleContext) Scale(offset int64) {
 
   newScale := c.RService.Scale + offset
 
-  fmt.Printf("Triggered scale %s: %d -> %d\n", adjective, c.RService.Scale, newScale)
+  if newScale <= 0 {
+    fmt.Printf("Ignoring scale %s: %d -> %d\n", adjective, c.RService.Scale, newScale)
+    return
+  } else {
+    fmt.Printf("Triggered scale %s: %d -> %d\n", adjective, c.RService.Scale, newScale)
+  }
+
 
   // sometimes Rancher takes ages to respond so do this async
   go func() {
