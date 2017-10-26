@@ -140,7 +140,7 @@ func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
 
   mclient := metadata.NewClient(metadataUrl)
   
-  service, err := mclient.GetServiceByName(stackName, serviceName)
+  service, err := mclient.GetSelfServiceByName(serviceName)
   if err != nil {
     log.Fatalln(err)
   }
@@ -151,7 +151,7 @@ func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
   }
 
   // get rancher hosts
-  rhosts, err := mclient.GetContainerHosts(rcontainers)
+  rhosts, err := mclient.GetHosts()
   if err != nil {
     log.Fatalln(err)
   }
@@ -191,7 +191,7 @@ func NewAutoscaleContext(c *cli.Context) *AutoscaleContext {
     Warmup: c.Duration("warmup"),
     Cooldown: c.Duration("cooldown"),
     Verbose: c.String("verbose") == "true",
-    mClient: mclient,
+    mClient: &mclient,
     mContainers: rcontainers,
     mHosts: rhosts,
     cInfoMap: make(map[string]*v1.ContainerInfo),
@@ -260,8 +260,7 @@ func (c *AutoscaleContext) GetCadvisorContainers() error {
 func (c *AutoscaleContext) PollMetadataChanges() {
   for {
     time.Sleep(pollMetadataInterval)
-
-    service, err := c.mClient.GetServiceByName(c.StackName, c.Service.Name)
+    service, err := (*c.mClient).GetSelfServiceByName(c.Service.Name)
     if err != nil {
       log.Println(err)
     }
